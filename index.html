@@ -3,6 +3,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Fixfirst – from complaints to action</title>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 :root{--bg:#EDEFEA;--card:#FBFBF8;--ink:#17262B;--mut:#5C6B6F;--line:#D3D9D3;--teal:#0E4D5C;--yel:#F0B90B;--crit:#C23B22;--high:#E07B1A;--med:#4F7D8C;--low:#93A59E;--map:#F6F7F2;--river:#D5E6EA;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#121A1D;--card:#1A2528;--ink:#E7ECEA;--mut:#93A3A6;--line:#2C3A3E;--teal:#6FC0D2;--map:#17221F;--river:#1F3A44}}
@@ -38,7 +39,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .brief{border-left:6px solid var(--yel)}.tl{border-left:2px solid var(--line);margin-left:6px;padding-left:14px}
 .tl div{position:relative;margin-bottom:12px}.tl div:before{content:"";position:absolute;left:-21px;top:5px;width:10px;height:10px;border-radius:50%;background:var(--teal)}
 .step{padding:8px 0;border-bottom:1px solid var(--line)}.warn{background:rgba(240,185,11,.18);padding:8px 10px;border-radius:6px;font-size:13.5px}
-ul{padding-left:20px;margin:6px 0}
+ul{padding-left:20px;margin:6px 0}.leaflet-container{font:inherit}.al{background:var(--card);color:var(--ink);padding:1px 6px;border-radius:4px;font:600 12px "Public Sans",sans-serif;white-space:nowrap;border:1px solid var(--line);position:relative;left:-24px;top:-10px}
 </style></head><body>
 <header><h1>Fixfirst</h1><small>Citizen reports → ranked, explained, tracked. Synthetic data only.</small>
 <nav id="nav"></nav></header>
@@ -96,22 +97,31 @@ seedStat("Garbage bin overflowing",[["Assigned","Assigned to Sanitation"],["In p
 seedStat("Pothole on Hampankatta",[["Assigned","Assigned to Roads dept"],["In progress","Patching scheduled"]]);
 seedStat("Streetlight not working",[["Assigned","Assigned to Electrical"]]);
 rescore();
-/* map */
-function mapSVG(o){let s=`<svg class="map" id="${o.id}" viewBox="0 0 100 100" role="img" aria-label="Schematic map of the demo area"><path d="M0 52Q50 47 100 50L100 57Q50 55 0 61Z" fill="var(--river)"/>`;
-for(const d of["M0 30Q50 40 100 22","M0 80Q50 70 100 68","M28 0Q35 50 22 100","M70 0Q65 50 76 100","M0 5L100 95"])s+=`<path d="${d}" fill="none" stroke="var(--line)" stroke-width="1.6"/>`;
-for(const a of AREAS)s+=`<text x="${a[1]-6}" y="${a[2]-10}">${a[0]}</text>`;
-if(o.clusters)for(const c of clusters())s+=`<circle cx="${c.cx}" cy="${c.cy}" r="${c.rad}" fill="rgba(240,185,11,.14)" stroke="var(--teal)" stroke-dasharray="1.5 1.2" stroke-width=".5"/>`;
-if(o.markers)for(const r of R.filter(r=>!r.dupOf)){const done=r.status=="Resolved",col={Critical:"var(--crit)",High:"var(--high)",Medium:"var(--med)",Low:"var(--low)"}[r.level];
-s+=`<circle cx="${r.x}" cy="${r.y}" r="${1.2+r.score/45}" fill="${done?"none":col}" stroke="${r.id==o.sel?"var(--ink)":done?"var(--mut)":"var(--card)"}" stroke-width="${r.id==o.sel?.9:.4}" style="cursor:pointer" onclick="pick('${r.id}')"><title>${r.id}: ${esc(r.summary)}</title></circle>`}
-if(o.pin)s+=`<path d="M${o.pin.x} ${o.pin.y}l-2.4-5a2.8 2.8 0 1 1 4.8 0z" fill="var(--yel)" stroke="var(--ink)" stroke-width=".5"/>`;
-return s+"</svg>"}
-const coords=p=>(12.90-p.y/100*.05).toFixed(4)+"° N, "+(74.82+p.x/100*.06).toFixed(4)+"° E";
+/* map: real OpenStreetMap tiles. Demo reports use offsets (1 unit = 60 m) from a movable origin */
+const O={lat:0,lng:0},MU=60,MM=111320,cs=()=>Math.cos(O.lat*Math.PI/180);
+const setO=(la,lo,x,y)=>{O.lat=la+y*MU/MM;O.lng=lo-x*MU/(MM*Math.cos(la*Math.PI/180))};setO(12.875,74.85,50,50);
+const ll=p=>[O.lat-p.y*MU/MM,O.lng+p.x*MU/(MM*cs())];
+const xy=(la,lo)=>({x:(lo-O.lng)*MM*cs()/MU,y:(O.lat-la)*MM/MU});
+let maps=[];
+function mapSVG(o){maps.push(o);return `<div class="map" id="${o.id}" role="application" aria-label="Map"></div>`}
+function drawMaps(){const cols={Critical:"#C23B22",High:"#E07B1A",Medium:"#4F7D8C",Low:"#93A59E"};
+for(const o of maps.splice(0)){if(typeof L=="undefined"){$("#"+o.id).innerHTML='<p class="mut" style="padding:16px">The map needs an internet connection to load.</p>';continue}
+const m=L.map(o.id,{scrollWheelZoom:false});
+{const bb=L.latLngBounds([ll({x:0,y:0}),ll({x:100,y:100})]);if(o.pin)bb.extend(ll(o.pin));m.fitBounds(bb)}
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap contributors"}).addTo(m);
+AREAS.forEach(a=>L.marker(ll({x:a[1],y:a[2]}),{icon:L.divIcon({className:"",html:`<b class="al">${a[0]}</b>`}),interactive:false}).addTo(m));
+if(o.clusters)for(const c of clusters())L.circle(ll({x:c.cx,y:c.cy}),{radius:c.rad*MU,color:"#0E4D5C",dashArray:"6 6",weight:2,fillColor:"#F0B90B",fillOpacity:.14}).addTo(m);
+if(o.markers)for(const r of R.filter(r=>!r.dupOf)){const done=r.status=="Resolved",on=r.id==o.sel;
+L.circleMarker(ll(r),{radius:5+r.score/12,color:on?"#17262B":"#fff",weight:on?3:1.5,fillColor:done?"#fff":cols[r.level],fillOpacity:done?.4:.9}).addTo(m).bindTooltip(r.id+": "+esc(r.summary)).on("click",()=>pick(r.id))}
+if(o.pin)L.circleMarker(ll(o.pin),{radius:9,color:"#17262B",weight:2,fillColor:"#F0B90B",fillOpacity:1}).addTo(m);
+if(o.id=="pm")m.on("click",e=>{const p=xy(e.latlng.lat,e.latlng.lng);pin={x:+p.x.toFixed(1),y:+p.y.toFixed(1)};geoMsg="";render()})}}
+const coords=p=>{const q=ll(p);return q[0].toFixed(4)+"° N, "+q[1].toFixed(4)+"° E"};
 const chip=r=>`<span class="chip ${r.level}">${r.level}</span>`,stc=r=>`<span class="chip st">${statusOf(r)}</span>`;
 /* views */
 function nav(){$("#nav").innerHTML=[["report","Report"],["track","Track"],["ops","Operations"],["about","Limits & honesty"]].map(([k,l])=>`<button class="${tab==k?"on":""}" onclick="go('${k}')">${l}</button>`).join("")}
 function go(t){tab=t;render()}
 function pick(id){sel=id;if(tab!="ops")tab="ops";render()}
-function render(){nav();$("#app").innerHTML=({report:vReport,track:vTrack,ops:vOps,about:vAbout})[tab]();if(tab=="report")bindReport()}
+function render(){nav();$("#app").innerHTML=({report:vReport,track:vTrack,ops:vOps,about:vAbout})[tab]();drawMaps();if(tab=="report")bindReport()}
 function vReport(){const sg=draft.text.length>8?classify(draft.text):null;
 return `<div class="two"><div class="card"><h2>Report a problem</h2>
 <label for="tx">What is wrong?</label><textarea id="tx" placeholder="e.g. Drain blocked near the bus stop, water on the road">${esc(draft.text)}</textarea>
@@ -122,18 +132,18 @@ return `<div class="two"><div class="card"><h2>Report a problem</h2>
 <label for="ad">Address or landmark (mocked lookup: try “Kadri”)</label><input type="text" id="ad" value="${esc(draft.addr)}">
 <button class="btn alt" type="button" onclick="locate()">Use my current location</button><p class="mut" id="gm">${geoMsg}</p><p class="mut">Or tap the map to drop a pin. ${pin?"Pin: "+coords(pin)+" ("+area(pin)+")":"No pin yet."}</p>
 <button class="btn" onclick="submitR()">Send report</button></div>
-<div>${mapSVG({id:"pm",pin})}<div class="mut" style="margin-top:6px">Schematic demo map, not a real basemap. Pin = demo coordinates.</div>
+<div>${mapSVG({id:"pm",pin})}<div class="mut" style="margin-top:6px">Map © OpenStreetMap contributors. Tap the map to place a pin.</div>
 ${last?resultCard(last):""}</div></div>`}
 function bindReport(){$("#tx").oninput=e=>{draft.text=e.target.value;const t=draft.text.length>8?classify(draft.text):null;$("#sug").textContent=t?"AI suggests: "+CATS[t.cat].n:"The AI suggests a category as you type."};
 $("#ct").onchange=e=>draft.cat=e.target.value;$("#ad").onchange=e=>{draft.addr=e.target.value;const a=AREAS.find(a=>draft.addr.toLowerCase().includes(a[0].toLowerCase()));if(a){pin={x:a[1],y:a[2]};render()}};
 $("#ph").onchange=e=>{const f=e.target.files[0];if(f){draft.photo=URL.createObjectURL(f);render()}};
-$("#pm").onclick=e=>{const b=$("#pm").getBoundingClientRect();pin={x:+((e.clientX-b.left)/b.width*100).toFixed(1),y:+((e.clientY-b.top)/b.height*100).toFixed(1)};render()}}
+}
 function locate(){if(!navigator.geolocation){geoMsg="This browser has no location access. Tap the map instead.";return render()}
 geoMsg="Finding you…";render();
-navigator.geolocation.getCurrentPosition(p=>{const la=p.coords.latitude,lo=p.coords.longitude,x=(lo-74.82)/.06*100,y=(12.90-la)/.05*100;
-if(x>=0&&x<=100&&y>=0&&y<=100){pin={x:+x.toFixed(1),y:+y.toFixed(1)};geoMsg="Located within about "+Math.round(p.coords.accuracy)+" m."}
-else geoMsg="Your location ("+la.toFixed(4)+", "+lo.toFixed(4)+") is outside the demo map, so no pin was placed. Tap the map to place a demo pin.";render()},
-e=>{geoMsg=e.code==1?"Location permission was denied or is blocked in this preview. Tap the map instead.":"Could not get your location. Tap the map instead.";render()},{enableHighAccuracy:true,timeout:10000})}
+navigator.geolocation.getCurrentPosition(p=>{const la=p.coords.latitude,lo=p.coords.longitude,acc="Located within about "+Math.round(p.coords.accuracy)+" m.";let u=xy(la,lo);
+if(u.x<-10||u.x>110||u.y<-10||u.y>110){setO(la,lo,70,26);u={x:70,y:26};geoMsg=acc+" The synthetic demo reports were moved to your area so you can try the full flow."}else geoMsg=acc;
+pin={x:+u.x.toFixed(1),y:+u.y.toFixed(1)};render()},
+e=>{geoMsg=e.code==1?"Location permission was denied. Allow it in the browser address bar, or tap the map instead.":"Could not get your location. Tap the map instead.";render()},{enableHighAccuracy:true,timeout:10000})}
 function submitR(){if(draft.text.trim().length<10)return alert("Describe the problem in a few words.");if(!pin)return alert("Drop a pin on the map or enter a known landmark.");
 const r=ingest({text:draft.text.trim(),x:pin.x,y:pin.y,ts:Date.now(),cat:draft.cat,photo:draft.photo});rescore();mine.push(r.id);last=r.id;trackId=r.id;draft={text:"",addr:"",cat:"",photo:null};pin=null;render();scrollTo(0,0)}
 function factorsHTML(r){return r.factors.map(([w,p])=>`<div class="fac"><span>${esc(w)}</span><b>${p>0?"+":""}${p}</b></div>`).join("")}
@@ -173,7 +183,7 @@ ${nx?`${r.status=="New"?`<label for="tm">Assign to (suggested: ${r.team})</label
 function act(id){const r=get(id),[s]=NEXT[r.status],t=$("#tm")?$("#tm").value:"",n=$("#nt").value.trim();
 r.status=s;r.log.push({s,t:Date.now(),n:n||(s=="Assigned"?"Assigned to "+t:s=="In progress"?"Work started":"Issue resolved")});rescore();render()}
 function vAbout(){return `<div class="card"><h2>Limits & honesty</h2><h3 style="margin-top:12px">Real</h3><ul><li>Every report you submit is processed live by the pipeline in this page: category, summary, duplicate check, priority, clustering and brief.</li><li>Assign and status changes update the operator queue and the citizen tracking view.</li></ul>
-<h3>Mocked</h3><ul><li>All 31 starting reports are synthetic, with deliberate duplicates, urgent hazards and clusters. No personal data.</li><li>The map is a schematic drawing with demo coordinates. The address box only knows four made-up area names. Browser location is real, but only pins inside the demo bounds (around Mangaluru).</li><li>No SMS, email or real authority integration. Citizen “notifications” are just the tracking page.</li><li>Nothing is saved after you close the page.</li></ul>
+<h3>Mocked</h3><ul><li>All 31 starting reports are synthetic, with deliberate duplicates, urgent hazards and clusters. No personal data.</li><li>The map uses real OpenStreetMap tiles, but the 31 starting reports sit at invented spots. When you use your location, the demo reports are moved to your area. The address box only knows four made-up area names.</li><li>No SMS, email or real authority integration. Citizen “notifications” are just the tracking page.</li><li>Nothing is saved after you close the page.</li></ul>
 <h3>How the AI works</h3><ul><li><b>Category:</b> keyword scoring. Misses unusual wording and mixed reports.</li><li><b>Summary:</b> first sentence, trimmed. No language model.</li><li><b>Duplicates:</b> same category, within 9 map units, and either 18% word overlap or within 3 units. Can miss paraphrases and can merge neighbouring but separate problems.</li><li><b>Priority:</b> category baseline + urgency phrases + nearby open reports + merged duplicates + age, capped at 100. Weights are hand-set, not learned, and should be reviewed by officials.</li><li><b>Clusters:</b> open reports linked within 9 units, at least 3 reports and 2 categories.</li><li>Photos are not analysed.</li></ul>
 <h3>Next</h3><ul><li>Embedding-based duplicate detection and an LLM for summaries, with human review.</li><li>Real map tiles and geocoding, photo analysis, accounts and notifications, and tuning weights against past outcomes.</li></ul></div>`}
 render();
